@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import json
 import sys
 
 user_interrupt_errors = (KeyboardInterrupt,)
@@ -284,21 +285,48 @@ def _print_translation(translation):
         word_table.append([side['word'] for side in entry['sides']])
     print(tabulate(word_table, headers=[LANGUAGES[args['source_lang']], 'German']))
 
-def _print_inflection_table(table):
-    print("/".join(table['translations']))
-    print(table['pos'].title())
+def _print_inflection_table(is_json, table):
+    if not is_json:
+        print("/".join(table['translations']))
+        print(table['pos'].title())
+
     if table['pos'] == 'verb':
-        print("Hilfsverb: " + table['aux'])
-        for mood in table['moods']:
-            print("===" + mood['name'] + "===")
-            for x, y in _pairwise(mood['tenses']):
-                if y:
-                    print(tabulate({x['name']: x['cases'], y['name']: y['cases']}, headers='keys'))
-                else:
-                    print(x['name'])
-                    print('-' * len(x['name']))
-                    print("\n".join(x['cases']))
+        if not is_json:
+            print("Hilfsverb: " + table['aux'])
+            for mood in table['moods']:
+                print("===" + mood['name'] + "===")
+                for x, y in _pairwise(mood['tenses']):
+                    if y:
+                        print(tabulate({x['name']: x['cases'], y['name']: y['cases']}, headers='keys'))
+                    else:
+                        print(x['name'])
+                        print('-' * len(x['name']))
+                        print("\n".join(x['cases']))
+        else:
+            # don't depend on leo's format
+            result = dict(helper_verb=table['aux'])
+            for mood in table['moods']:
+                mood_result = dict()
+                tenses = dict()
+                for tense in mood['tenses']:
+                    tense_result = dict()
+                    if len(tense['cases']) == 1:
+                        tense_result, = tense['cases']
+                    else:
+                        for case in tense['cases']:
+                            person, verb = case.split(' ', 1)
+                            if person == 'er/sie/es':
+                                person = 'es'
+                            tense_result[person] = verb
+
+                    mood_result[_make_variable(tense['name'])] = tense_result
+
+                result[_make_variable(mood['name'])] = mood_result
+            print(json.dumps(result))
+
     elif table['pos'] == 'noun':
+        if is_json:
+            raise NotImplementedError()
         for mood in table['moods']:
             print("===" + mood['name'] + "===")
             for x, y in _pairwise(mood['variants']):
@@ -310,11 +338,26 @@ def _print_inflection_table(table):
                     print(x['name'])
                     print(tabulate(x['cases']))
     elif table['pos'] == 'adjective':
+        if is_json:
+            raise NotImplementedError()
         for mood in table['moods']:
             print("===" + mood['name'] + "===")
             for variant in mood['variants']:
                 print(variant['name'])
                 print(tabulate(variant['cases']))
+
+def _make_variable(string):
+    initial_string = string
+    string = string.replace('-', ' ')
+    while '  ' in string:
+        string = string.replace('  ', ' ')
+
+    # note that there are multiple representations for letters with diaresis markers
+    # http://unicodelookup.com/#latin/2
+    for umlaut, pair in {u'\xfc': u'ue', u'\xf6': 'oe', u'\xe4': 'ae', u'ß': u'ss'}.items():
+        string = string.replace(umlaut, pair)
+
+    return string.replace(' ', '_').lower().replace('/', '_and_')
 
 if __name__ == '__main__':
     lang = 'ende'  # language
@@ -334,6 +377,7 @@ if __name__ == '__main__':
         help="print dictionary definitions. True by default if -i is not specified.")
     parser.add_argument("-v", "--verbose",
         action="store_true", dest="verbose", default=False, help="Print debug messages")
+    parser.add_argument('--json', action='store_true', help='Output in machine readable json')
     args = vars(parser.parse_args())
 
     if not args['inflect']:
@@ -361,7 +405,7 @@ if __name__ == '__main__':
                 table_count = 0
                 for table in tables:
                     table_count += 1
-                    _print_inflection_table(table)
+                    _print_inflection_table(args['json'], table)
                     print()
                     sys.stdout.flush()
                 if table_count == 0:
