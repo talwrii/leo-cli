@@ -1,9 +1,12 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 from __future__ import print_function
 
 import json
+import os
 import sys
+import uuid
 
 user_interrupt_errors = (KeyboardInterrupt,)
 if sys.version_info[0] == 3:
@@ -38,8 +41,10 @@ TRANSLATE_URL = """http://dict.leo.org/dictQuery/m-vocab/%(lang)s/query.xml?tole
 FLECTAB_URL = """https://dict.leo.org/dictQuery/m-vocab/ende/stemming.xml"""
 
 class LeoRequestManager:
-    def __init__(self):
+    def __init__(self, cacher):
         self.recentlySent = False
+        self._cacher = cacher
+
     def get_xml(self, url, verbose=False):
         """Returns soup object (xml parsed with lxml)
         If another request has been sent previously, this pauses for 3 seconds
@@ -50,11 +55,37 @@ class LeoRequestManager:
                 print("Pausing between requests to LEO server...")
             time.sleep(1)
         self.recentlySent = True
-        r = requests.get(url)
-        soup = BeautifulSoup(r.text, 'lxml')
+
+        text = self._cacher.get(url)
+        soup = BeautifulSoup(text, 'lxml')
         return soup
 
-requestManager = LeoRequestManager()
+class PageCacher(object):
+    def __init__(self, directory):
+        self.directory = directory
+
+    def get(self, url):
+        self._ensure_dir(self.directory)
+        filename = os.path.join(self.directory, str(uuid.uuid5(uuid.NAMESPACE_DNS, url)))
+
+        if not os.path.exists(filename):
+            r = requests.get(url)
+            with open(filename, 'w') as stream:
+                stream.write(r.text.encode('utf8'))
+
+        with open(filename) as stream:
+            return stream.read()
+
+    @staticmethod
+    def _ensure_dir(directory):
+        if not os.path.isdir(directory):
+            os.makedirs(directory)
+
+
+
+CACHE_DIR = os.path.join(os.environ['HOME'], '.leo', 'cache')
+page_cache = PageCacher(CACHE_DIR)
+requestManager = LeoRequestManager(page_cache)
 
 def get_entries(word, source_lang, pos_filter, verbose=False):
     entries = _retrieve_translation_doc(word, source_lang, verbose=verbose).find_all('entry')
@@ -322,7 +353,7 @@ def _print_inflection_table(is_json, table):
                     mood_result[_make_variable(tense['name'])] = tense_result
 
                 result[_make_variable(mood['name'])] = mood_result
-            print(json.dumps(result))
+            print(json.dumps(result), end='')
 
     elif table['pos'] == 'noun':
         if is_json:
